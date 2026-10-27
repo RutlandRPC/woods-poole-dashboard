@@ -1,0 +1,818 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Rutland VT Metrics</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation"></script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Interactive visualization of Rutland VT demographic and economic metrics">
+    <meta name="theme-color" content="#ffffff">
+    <!-- Open Graph tags for social sharing -->
+    <meta property="og:title" content="Rutland VT Metrics">
+    <meta property="og:description" content="Interactive visualization of Rutland VT demographic and economic metrics">
+    <meta property="og:type" content="website">
+    <style>
+        .container {
+            width: 80%;
+            margin: 20px auto;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+        }
+        select {
+            width: 100%;
+            padding: 10px;
+            margin-bottom: 20px;
+            font-size: 16px;
+            font-family: inherit;
+        }
+        #viewSelect {
+            margin-bottom: 10px;
+        }
+        #metricCheckboxes {
+            margin-bottom: 20px;
+            border: 1px solid #ddd;
+            padding: 10px;
+            border-radius: 4px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-size: 14px;
+        }
+        #metricCheckboxes label {
+            display: block;
+            padding: 5px;
+            cursor: pointer;
+        }
+        #metricCheckboxes label:hover {
+            background-color: #f5f5f5;
+        }
+        #metricCheckboxes input[type="checkbox"] {
+            margin-right: 10px;
+        }
+        .checkbox-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            padding: 5px;
+            border-bottom: 1px solid #ddd;
+        }
+        .clear-all {
+            background-color: #f8f9fa;
+            border: 1px solid #ddd;
+            padding: 5px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        .clear-all:hover {
+            background-color: #e9ecef;
+        }
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            font-size: 1.2em;
+            color: #666;
+        }
+        .error {
+            color: #dc3545;
+            padding: 1em;
+            border: 1px solid #dc3545;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        @media (max-width: 768px) {
+            .container {
+                width: 95%;
+            }
+            #metricCheckboxes {
+                font-size: 12px;
+            }
+            select {
+                font-size: 14px;
+            }
+        }
+        .chart-container {
+            position: relative;
+            height: 60vh;  /* Set height relative to viewport height */
+            min-height: 400px;  /* Minimum height */
+            max-height: 800px;  /* Maximum height */
+            width: 100%;
+        }
+        canvas {
+            max-width: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div class="container" role="main">
+        <div id="metricCheckboxes" role="region" aria-label="Chart controls">
+            <div class="checkbox-header">
+                <span id="metrics-heading">Select Metrics to Compare</span>
+                <button class="clear-all" aria-label="Clear all selected metrics">Clear All</button>
+            </div>
+            <div id="checkbox-list" role="group" aria-labelledby="metrics-heading"></div>
+        </div>
+        <div class="chart-container" role="region" aria-label="Chart visualization">
+            <canvas id="myChart" aria-label="Data visualization chart" role="img"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Parse CSV data
+        async function loadData() {
+            const response = await fetch('EC550021.CSV - Transposed.csv');
+            const csvText = await response.text();
+            return new Promise(resolve => {
+                Papa.parse(csvText, {
+                    complete: (results) => {
+                        resolve(results.data);
+                    }
+                });
+            });
+        }
+
+        // Initialize chart
+        let chart;
+        
+        function createLineDatasets(metricIndex) {
+            const allData = data.slice(1).map(row => parseFloat(row[metricIndex]) || 0);
+            const splitYear = 2024;
+            const splitIndex = years.findIndex(year => parseInt(year) > splitYear);
+            const metricName = headers[metricIndex].replace(/"/g, '').split('(')[0].trim();
+            const isThousands = headers[metricIndex].toLowerCase().includes('thousands');
+
+            // Accessible color palette
+            const colors = [
+                { main: 'rgb(0, 107, 164)', dash: 'rgb(0, 107, 164, 0.6)' },   // Blue
+                { main: 'rgb(200, 0, 0)', dash: 'rgb(200, 0, 0, 0.6)' },       // Red
+                { main: 'rgb(0, 140, 0)', dash: 'rgb(0, 140, 0, 0.6)' },       // Green
+                { main: 'rgb(148, 0, 211)', dash: 'rgb(148, 0, 211, 0.6)' },   // Purple
+                { main: 'rgb(230, 130, 0)', dash: 'rgb(230, 130, 0, 0.6)' }    // Orange
+            ];
+
+            const colorIndex = (metricIndex - 1) % colors.length;
+            const color = colors[colorIndex];
+
+            return [
+                {
+                    label: metricName + ' (Historical)',
+                    data: allData.slice(0, splitIndex),
+                    borderColor: color.main,
+                    backgroundColor: color.main,
+                    pointRadius: 0,
+                    tension: 0.1,
+                    originalIndex: metricIndex,
+                    _isThousands: isThousands
+                },
+                {
+                    label: metricName + ' (Projected)',
+                    data: Array(splitIndex).fill(null).concat(allData.slice(splitIndex)),
+                    borderColor: color.main,
+                    borderDash: [6, 6],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    tension: 0.1,
+                    originalIndex: metricIndex,
+                    _isThousands: isThousands
+                }
+            ];
+        }
+
+        function createStackedDatasets() {
+            const splitYear = 2024;
+            const splitIndex = years.findIndex(year => parseInt(year) > splitYear);
+            
+            // Define our primary age groups that should be enabled by default
+            const primaryGroups = ['0 to 19 YEARS', '20 to 64 YEARS', '65 YEARS and OVER'];
+            
+            // Find all metrics containing "TOTAL POPULATION AGE"
+            const ageGroups = headers
+                .map((header, index) => {
+                    if (header.includes('TOTAL POPULATION AGE')) {
+                        const label = header
+                            .replace('TOTAL POPULATION AGE', '')
+                            .replace('(in thousands)', '')
+                            .replace(/"/g, '')
+                            .trim();
+                            
+                        return {
+                            index: index,
+                            label: label,
+                            enabled: primaryGroups.includes(label)
+                        };
+                    }
+                    return null;
+                })
+                .filter(group => group !== null);
+
+            const colors = [
+                'rgb(0, 107, 164)',    // Blue
+                'rgb(200, 0, 0)',      // Red
+                'rgb(0, 140, 0)',      // Green
+                'rgb(148, 0, 211)',    // Purple
+                'rgb(230, 130, 0)',    // Orange
+                'rgb(0, 128, 128)',    // Teal
+                'rgb(128, 0, 128)',    // Dark Purple
+                'rgb(184, 134, 11)',   // Golden Brown
+                'rgb(0, 100, 0)',      // Dark Green
+                'rgb(139, 69, 19)'     // Saddle Brown
+            ];
+
+            return ageGroups.map((group, i) => {
+                const allData = data.slice(1).map(row => parseFloat(row[group.index]) || 0);
+                return {
+                    label: group.label,
+                    data: allData,
+                    backgroundColor: colors[i % colors.length],
+                    borderColor: colors[i % colors.length],
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    hidden: !group.enabled,
+                    _isThousands: true,
+                    borderDash: ctx => ctx.dataIndex >= splitIndex ? [6, 6] : []
+                };
+            });
+        }
+
+        function createDemographicDatasets() {
+            const splitYear = 2024;
+            const splitIndex = years.findIndex(year => parseInt(year) > splitYear);
+            
+            const demographicGroups = [
+                'WHITE not HISPANIC or LATINO POPULATION',
+                'BLACK or AFRICAN AMERICAN not HISPANIC or LATINO POPULATION',
+                'AMERICAN INDIAN or ALASKA NATIVE not HISPANIC or LATINO POPULATION',
+                'ASIAN and NATIVE HAWAIIAN or PACIFIC ISLANDER not HISPANIC or LATINO POPULATION',
+                'HISPANIC or LATINO POPULATION of ANY RACE'
+            ];
+            
+            const colors = [
+                'rgb(70, 130, 180)',     // Steel Blue
+                'rgb(188, 143, 143)',    // Rosy Brown
+                'rgb(205, 133, 63)',     // Peru
+                'rgb(147, 112, 219)',    // Medium Purple
+                'rgb(60, 179, 113)'      // Medium Sea Green
+            ];
+
+            const datasets = demographicGroups.map((groupName, i) => {
+                const index = headers.findIndex(header => 
+                    header.includes(groupName) && header.includes('(in thousands)'));
+                
+                if (index === -1) {
+                    console.warn(`Metric not found: ${groupName}`);
+                    return null;
+                }
+
+                const allData = data.slice(1).map(row => parseFloat(row[index]) || 0);
+                
+                return {
+                    label: groupName.replace(' POPULATION', '').replace(' not ', ' Non-'),
+                    data: allData,
+                    backgroundColor: colors[i],
+                    borderColor: colors[i],
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    _isThousands: true,
+                    borderDash: ctx => ctx.dataIndex >= splitIndex ? [6, 6] : []
+                };
+            }).filter(dataset => dataset !== null);
+
+            return datasets;
+        }
+
+        function createHouseholdIncomeDatasets() {
+            const splitYear = 2024;
+            const splitIndex = years.findIndex(year => parseInt(year) > splitYear);
+            
+            const incomeGroups = [
+                'NUMBER of HOUSEHOLDS with MONEY INCOME LESS THAN $10,000',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $10,000 to $19,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $20,000 to $29,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $30,000 to $44,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $45,000 to $59,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $60,000 to $74,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $75,000 to $99,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $100,000 to $124,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $125,000 to $149,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $150,000 to $199,999',
+                'NUMBER of HOUSEHOLDS with MONEY INCOME $200,000 or MORE'
+            ];
+            
+            // Modified ColorBrewer YlGn palette with darker range
+            const colors = [
+                'rgb(247, 252, 185)',  // Slightly darker start
+                'rgb(217, 240, 163)',
+                'rgb(173, 221, 142)',
+                'rgb(120, 198, 121)',
+                'rgb(65, 171, 93)',
+                'rgb(35, 132, 67)',
+                'rgb(0, 104, 55)',
+                'rgb(0, 90, 50)',
+                'rgb(0, 76, 45)',
+                'rgb(0, 63, 40)',
+                'rgb(0, 50, 35)'       // Darkest green
+            ].reverse();  // Reverse so darker colors are at the bottom of the stack
+
+            const datasets = incomeGroups.map((groupName, i) => {
+                const index = headers.findIndex(header => 
+                    header.includes(groupName) && header.includes('(in thousands of households'));
+                
+                if (index === -1) {
+                    console.warn(`Metric not found: ${groupName}`);
+                    return null;
+                }
+
+                const allData = data.slice(1).map(row => parseFloat(row[index]) || 0);
+                
+                return {
+                    label: groupName
+                        .replace('NUMBER of HOUSEHOLDS with MONEY INCOME', '')
+                        .replace('(in thousands of households, income bracket in 2009 dollars)', '')
+                        .trim(),
+                    data: allData,
+                    backgroundColor: colors[i],
+                    borderColor: colors[i],
+                    fill: true,
+                    tension: 0.4,
+                    pointRadius: 0,
+                    _isThousands: true,
+                    borderDash: ctx => ctx.dataIndex >= splitIndex ? [6, 6] : []
+                };
+            }).filter(dataset => dataset !== null);
+
+            return datasets;
+        }
+
+        // Save selections to local storage
+        function saveSelections() {
+            const checked = [...document.querySelectorAll('#checkbox-list input:checked')]
+                .map(cb => cb.value);
+            localStorage.setItem('selectedMetrics', JSON.stringify(checked));
+        }
+
+        // Restore selections from local storage
+        function restoreSelections() {
+            try {
+                const saved = JSON.parse(localStorage.getItem('selectedMetrics')) || [1];
+                saved.forEach(value => {
+                    const checkbox = document.querySelector(`#metric-${value}`);
+                    if (checkbox) checkbox.checked = true;
+                });
+            } catch (e) {
+                console.warn('Error restoring selections:', e);
+            }
+        }
+
+        // Debounce the chart updates
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        // Use debounced update for checkbox changes
+        const debouncedUpdate = debounce((datasets) => {
+            chart.data.datasets = datasets;
+            chart.update();
+        }, 100);
+
+        function getMetricCategory(header) {
+            const categories = {
+                demographics: {
+                    keywords: ['POPULATION', 'BIRTHS', 'DEATHS', 'MIGRATION'],
+                    color: '#e3f2fd'  // Light blue
+                },
+                income: {
+                    keywords: ['INCOME', 'EARNINGS', 'WAGE'],
+                    color: '#e8f5e9'  // Light green
+                },
+                employment: {
+                    keywords: ['EMPLOYMENT', 'JOBS', 'LABOR FORCE', 'UNEMPLOYED'],
+                    color: '#fff3e0'  // Light orange
+                },
+                housing: {
+                    keywords: ['HOUSEHOLDS', 'HOUSING'],
+                    color: '#f3e5f5'  // Light purple
+                },
+                economic: {
+                    keywords: ['GDP', 'GROSS DOMESTIC', 'PERSONAL CONSUMPTION'],
+                    color: '#fce4ec'  // Light pink
+                }
+            };
+
+            for (const [category, info] of Object.entries(categories)) {
+                if (info.keywords.some(keyword => header.includes(keyword))) {
+                    return info;
+                }
+            }
+            return { color: '#f5f5f5' };  // Default light gray
+        }
+
+        // Update the getMetricUnits function
+        function getMetricUnits(header) {
+            const unitsMatch = header.match(/\(([^)]+)\)/);
+            if (!unitsMatch) return '';
+            
+            // Remove "in thousands" or "thousands" from the units
+            return unitsMatch[1]
+                .replace(/in thousands,?\s*/i, '')
+                .replace(/thousands,?\s*/i, '')
+                .trim();
+        }
+
+        // Add this helper function to determine the scale of numbers
+        function getValueScale(datasets) {
+            let maxValue = 0;
+            datasets.forEach(dataset => {
+                const max = Math.max(...dataset.data.filter(val => val !== null));
+                if (dataset._isThousands) {
+                    maxValue = Math.max(maxValue, max * 1000);
+                } else {
+                    maxValue = Math.max(maxValue, max);
+                }
+            });
+            
+            if (maxValue >= 1000000) return '(millions)';
+            if (maxValue >= 1000) return '(thousands)';
+            return '';
+        }
+
+        // Update the getYAxisTitle function
+        function getYAxisTitle(datasets, viewType) {
+            // For stacked views, use fixed labels
+            if (viewType === 'stacked') return 'Population (thousands)';
+            if (viewType === 'demographics') return 'Population (thousands)';
+            if (viewType === 'income') return 'Households (thousands)';
+            
+            // For line chart view with no selections
+            if (datasets.length === 0) return 'Value';
+            
+            // For line chart view, check selected metrics
+            const units = new Set(datasets.map(dataset => {
+                const header = headers[parseInt(dataset.originalIndex || 1)];
+                const fullUnits = header.match(/\(([^)]+)\)/);
+                return fullUnits ? fullUnits[1] : '';
+            }).filter(unit => unit)); // Remove empty units
+            
+            // If all metrics share the same unit
+            if (units.size === 1) {
+                const baseUnit = Array.from(units)[0]
+                    .replace(/in thousands,?\s*/i, '')
+                    .replace(/thousands,?\s*/i, '')
+                    .trim();
+                const scale = getValueScale(datasets);
+                return baseUnit + (scale ? ' ' + scale : '');
+            }
+            
+            // If mixed units, show generic label with scale
+            const scale = getValueScale(datasets);
+            return 'Multiple Units ' + scale + ' (hover for details)';
+        }
+
+        async function initializeChart() {
+            const container = document.querySelector('.container');
+            try {
+                container.innerHTML = '<div class="loading">Loading data...</div>';
+                
+                // Load data first
+                data = await loadData();
+                years = data.slice(1).map(row => row[0].match(/\d{4}/)[0]);
+                headers = data[0];
+
+                // Reset container with proper structure
+                container.innerHTML = `
+                    <div id="metricCheckboxes" role="region" aria-label="Chart controls">
+                        <div class="checkbox-header">
+                            <span id="metrics-heading">Select Metrics to Compare</span>
+                            <button class="clear-all" aria-label="Clear all selected metrics">Clear All</button>
+                        </div>
+                        <div id="checkbox-list" role="group" aria-labelledby="metrics-heading"></div>
+                    </div>
+                    <div class="chart-container" role="region" aria-label="Chart visualization">
+                        <canvas id="myChart" aria-label="Data visualization chart" role="img"></canvas>
+                    </div>
+                `;
+
+                // Now create checkboxes after the structure exists
+                const checkboxContainer = document.getElementById('checkbox-list');
+                
+                // Add view type selector
+                const viewSelect = document.createElement('select');
+                viewSelect.id = 'viewSelect';
+                viewSelect.innerHTML = `
+                    <option value="line">Compare Metrics</option>
+                    <option value="stacked">Population Age Groups</option>
+                    <option value="demographics">Population Demographics</option>
+                    <option value="income">Household Income Distribution</option>
+                `;
+                checkboxContainer.parentNode.insertBefore(viewSelect, checkboxContainer);
+
+                // Create checkboxes
+                headers.forEach((header, index) => {
+                    if (index > 0) {
+                        const label = document.createElement('label');
+                        const checkbox = document.createElement('input');
+                        checkbox.type = 'checkbox';
+                        checkbox.value = index;
+                        if (index === 1) checkbox.checked = true;
+                        
+                        const text = document.createTextNode(header.replace(/"/g, '').split('(')[0].trim());
+                        label.appendChild(checkbox);
+                        label.appendChild(text);
+                        
+                        // Add category-based background color
+                        const category = getMetricCategory(header);
+                        label.style.backgroundColor = category.color;
+                        label.style.borderLeft = '4px solid ' + category.color.replace('f', '8');  // Darker shade for border
+                        label.style.margin = '2px 0';
+                        label.style.borderRadius = '2px';
+                        
+                        checkboxContainer.appendChild(label);
+
+                        checkbox.addEventListener('keydown', (e) => {
+                            if (e.key === 'Enter') {
+                                checkbox.checked = !checkbox.checked;
+                                checkbox.dispatchEvent(new Event('change'));
+                            }
+                        });
+
+                        label.title = header.replace(/"/g, '').trim(); // Full text on hover
+                    }
+                });
+
+                // Add category legend to the checkbox header
+                const legendHtml = `
+                    <div class="category-legend" style="margin-top: 5px; font-size: 12px;">
+                        <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                            <span style="background: #e3f2fd; padding: 2px 6px; border-radius: 2px;">Demographics</span>
+                            <span style="background: #e8f5e9; padding: 2px 6px; border-radius: 2px;">Income</span>
+                            <span style="background: #fff3e0; padding: 2px 6px; border-radius: 2px;">Employment</span>
+                            <span style="background: #f3e5f5; padding: 2px 6px; border-radius: 2px;">Housing</span>
+                            <span style="background: #fce4ec; padding: 2px 6px; border-radius: 2px;">Economic</span>
+                        </div>
+                    </div>
+                `;
+
+                document.querySelector('.checkbox-header').insertAdjacentHTML('beforeend', legendHtml);
+
+                // Create initial chart
+                const ctx = document.getElementById('myChart').getContext('2d');
+                chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: years,
+                        datasets: createLineDatasets(1)
+                    },
+                    options: {
+                        responsive: true,
+                        scales: {
+                            y: {
+                                stacked: false,
+                                beginAtZero: true,
+                                title: {
+                                    display: true,
+                                    text: getYAxisTitle(createLineDatasets(1), 'line')
+                                }
+                            },
+                            x: {
+                                title: {
+                                    display: true,
+                                    text: 'Year'
+                                }
+                            }
+                        },
+                        plugins: {
+                            tooltip: {
+                                mode: 'index',
+                                intersect: false,
+                                callbacks: {
+                                    label: function(context) {
+                                        let label = context.dataset.label || '';
+                                        if (label) {
+                                            label += ': ';
+                                        }
+                                        if (context.parsed.y !== null) {
+                                            // Round to 3 decimal places and multiply by 1000 if in thousands
+                                            const rawValue = context.dataset._isThousands ? 
+                                                Math.round(context.parsed.y * 1000) : 
+                                                Math.round(context.parsed.y);
+                                            
+                                            label += rawValue.toLocaleString();
+                                            
+                                            const units = getMetricUnits(headers[context.dataset.originalIndex || 1]);
+                                            if (units) {
+                                                label += ` ${units}`;
+                                            }
+                                            
+                                            // Add percentage for stacked charts
+                                            if (context.chart.options.scales.y.stacked) {
+                                                const total = context.chart.data.datasets.reduce((sum, dataset) => {
+                                                    const value = dataset.data[context.dataIndex] || 0;
+                                                    return sum + (dataset.hidden ? 0 : value);
+                                                }, 0);
+                                                if (total > 0) {
+                                                    const percentage = ((context.parsed.y / total) * 100).toFixed(1);
+                                                    label += ` (${percentage}%)`;
+                                                }
+                                            }
+                                        }
+                                        return label;
+                                    }
+                                }
+                            }
+                        },
+                        annotation: {
+                            drawTime: 'afterDatasetsDraw',
+                            annotations: {
+                                projectionLine: {
+                                    type: 'line',
+                                    xMin: '2024',
+                                    xMax: '2024',
+                                    yScaleID: 'y',
+                                    borderColor: 'rgba(0, 0, 0, 0.7)',
+                                    borderWidth: 2,
+                                    borderDash: [6, 6],
+                                    label: {
+                                        display: true,
+                                        content: 'Projections →',
+                                        position: 'start'
+                                    }
+                                }
+                            }
+                        },
+                        interaction: {
+                            mode: 'index',
+                            intersect: false
+                        },
+                        elements: {
+                            point: {
+                                radius: 0,
+                                hoverRadius: 0
+                            }
+                        }
+                    }
+                });
+
+                // Handle checkbox changes
+                checkboxContainer.addEventListener('change', (event) => {
+                    const checkedBoxes = [...checkboxContainer.querySelectorAll('input:checked')];
+                    const datasets = checkedBoxes
+                        .map(checkbox => createLineDatasets(parseInt(checkbox.value)))
+                        .flat();
+                    chart.data.datasets = datasets;
+                    chart.update();
+                    saveSelections();
+                });
+
+                // Update view type change handler
+                viewSelect.addEventListener('change', (event) => {
+                    const viewType = event.target.value;
+                    const isStacked = viewType !== 'line';
+                    checkboxContainer.style.display = isStacked ? 'none' : 'block';
+                    
+                    chart.destroy();
+                    
+                    const datasets = viewType === 'stacked' ? createStackedDatasets() :
+                                    viewType === 'demographics' ? createDemographicDatasets() :
+                                    viewType === 'income' ? createHouseholdIncomeDatasets() :
+                                    [...document.querySelectorAll('#metricCheckboxes input:checked')]
+                                        .map(checkbox => createLineDatasets(parseInt(checkbox.value)))
+                                        .flat();
+
+                    chart = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: years,
+                            datasets: datasets
+                        },
+                        options: {
+                            responsive: true,
+                            scales: {
+                                y: {
+                                    stacked: isStacked,
+                                    beginAtZero: true,
+                                    title: {
+                                        display: true,
+                                        text: getYAxisTitle(datasets, viewType)
+                                    }
+                                },
+                                x: {
+                                    title: {
+                                        display: true,
+                                        text: 'Year'
+                                    }
+                                }
+                            },
+                            plugins: {
+                                title: {
+                                    display: isStacked,
+                                    text: viewType === 'stacked' ? 'Rutland VT Population by Age Group' :
+                                          viewType === 'demographics' ? 'Rutland VT Population Demographics' :
+                                          viewType === 'income' ? 'Rutland VT Household Income Distribution' : ''
+                                },
+                                tooltip: {
+                                    mode: 'index',
+                                    intersect: false,
+                                    callbacks: {
+                                        label: function(context) {
+                                            let label = context.dataset.label || '';
+                                            if (label) {
+                                                label += ': ';
+                                            }
+                                            if (context.parsed.y !== null) {
+                                                // Round to 3 decimal places and multiply by 1000 if in thousands
+                                                const rawValue = context.dataset._isThousands ? 
+                                                    Math.round(context.parsed.y * 1000) : 
+                                                    Math.round(context.parsed.y);
+                                                
+                                                label += rawValue.toLocaleString();
+                                                
+                                                const units = getMetricUnits(headers[context.dataset.originalIndex || 1]);
+                                                if (units) {
+                                                    label += ` ${units}`;
+                                                }
+                                                
+                                                // Add percentage for stacked charts
+                                                if (context.chart.options.scales.y.stacked) {
+                                                    const total = context.chart.data.datasets.reduce((sum, dataset) => {
+                                                        const value = dataset.data[context.dataIndex] || 0;
+                                                        return sum + (dataset.hidden ? 0 : value);
+                                                    }, 0);
+                                                    if (total > 0) {
+                                                        const percentage = ((context.parsed.y / total) * 100).toFixed(1);
+                                                        label += ` (${percentage}%)`;
+                                                    }
+                                                }
+                                            }
+                                            return label;
+                                        }
+                                    }
+                                },
+                                annotation: {
+                                    drawTime: 'afterDatasetsDraw',
+                                    annotations: {
+                                        projectionLine: {
+                                            type: 'line',
+                                            xMin: '2024',
+                                            xMax: '2024',
+                                            yScaleID: 'y',
+                                            borderColor: 'rgba(0, 0, 0, 0.7)',
+                                            borderWidth: 2,
+                                            borderDash: [6, 6],
+                                            label: {
+                                                display: true,
+                                                content: 'Projections →',
+                                                position: 'start'
+                                            }
+                                        }
+                                    }
+                                }
+                            },
+                            interaction: {
+                                mode: 'index',
+                                intersect: false
+                            },
+                            elements: {
+                                point: {
+                                    radius: 0,
+                                    hoverRadius: 0
+                                }
+                            }
+                        }
+                    });
+                });
+
+                // Add clear all button functionality
+                document.querySelector('.clear-all').addEventListener('click', () => {
+                    const checkboxes = checkboxContainer.querySelectorAll('input[type="checkbox"]');
+                    checkboxes.forEach(checkbox => checkbox.checked = false);
+                    chart.data.datasets = [];
+                    chart.update();
+                });
+            } catch (error) {
+                console.error('Error loading chart:', error);
+                container.innerHTML = `
+                    <div class="error">
+                        Unable to load chart data. Please try refreshing the page.
+                        <br>Error: ${error.message}
+                    </div>
+                `;
+            }
+        }
+
+        initializeChart();
+    </script>
+</body>
+</html>
